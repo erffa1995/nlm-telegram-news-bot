@@ -18,29 +18,54 @@ FEEDS = {
     "Forexlive": "https://www.forexlive.com/feed/news/"
 }
 
-# HIGH IMPACT ONLY (keyword-based)
+# -----------------------------
+# STRICT HIGH IMPACT FILTER (Tier-1 only)
+# -----------------------------
 HIGH_IMPACT_TERMS = [
-    "cpi", "inflation", "core inflation", "pce",
+    # Inflation (Tier 1)
+    "cpi", "core cpi", "pce", "core pce", "inflation",
+
+    # Jobs (Tier 1)
     "non-farm payroll", "nonfarm payroll", "nfp", "payrolls",
-    "unemployment rate", "jobs report", "employment",
-    "fomc", "fed meeting", "federal reserve",
-    "interest rate decision", "rate decision", "rate hike", "rate cut",
-    "ecb", "boe", "boj", "snb", "rba", "boc", "rbnz",
-    "gdp", "pmi",
+    "unemployment rate", "jobs report",
+
+    # Fed / FOMC (Tier 1)
+    "fomc", "federal reserve", "fed rate", "rate decision",
+    "fed statement", "fed minutes", "powell",
+
+    # Major CB decisions (Tier 1)
+    "ecb rate", "boe rate", "boj rate",
+    "ecb meeting", "boe meeting", "boj meeting",
+    "press conference"
 ]
 
-# Relevance filter (markets you care about)
+# Optional Tier 2 (OFF by default)
+HIGH_IMPACT_OPTIONAL = ["gdp", "pmi"]
+ALLOW_TIER2 = False  # keep strict
+
+# -----------------------------
+# RELEVANCE FILTER (markets you want)
+# -----------------------------
 RELEVANCE_TERMS = [
-    "usd", "eur", "gbp", "jpy", "chf", "aud", "cad", "nzd",
-    "dollar", "euro", "pound", "sterling", "yen",
+    # FX / currencies / pairs
+    "eur", "usd", "gbp", "jpy", "chf", "aud", "cad", "nzd",
+    "eur/usd", "gbp/usd", "usd/jpy", "usd/chf", "aud/usd", "usd/cad", "nzd/usd",
+    "euro", "dollar", "pound", "sterling", "yen",
+
+    # Metals
     "gold", "silver", "xau", "xag",
+
+    # Indices
     "dax", "dow", "nasdaq", "s&p", "spx", "ndx",
-    "oil", "brent", "wti", "crude",
-    "fed", "fomc", "ecb", "boe", "cpi", "nfp", "inflation", "rate"
+
+    # Energy
+    "oil", "brent", "wti", "crude"
 ]
 
-# --- Hashtag rules ---
-# RULE 1 (highest priority): if a major FX pair appears, hashtag the pair (ONE tag)
+# -----------------------------
+# ONE HASHTAG ONLY (primary asset)
+# Priority: FX pair > non-FX asset > single currency fallback
+# -----------------------------
 PAIR_RULES = [
     ("eur/usd", "#EURUSD"), ("eurusd", "#EURUSD"),
     ("gbp/usd", "#GBPUSD"), ("gbpusd", "#GBPUSD"),
@@ -54,20 +79,18 @@ PAIR_RULES = [
     ("gbp/jpy", "#GBPJPY"), ("gbpjpy", "#GBPJPY"),
 ]
 
-# RULE 2: non-FX assets (metals, energy, indices)
 NONFX_PRIMARY_RULES = [
     ("xauusd", "#GOLD"), ("gold", "#GOLD"),
     ("xagusd", "#SILVER"), ("silver", "#SILVER"),
     ("wtiusd", "#WTI"), ("wti", "#WTI"),
     ("brnusd", "#BRENT"), ("brent", "#BRENT"),
-    ("crude", "#OIL"), ("oil", "#OIL"),
     ("ndx", "#NASDAQ"), ("nasdaq", "#NASDAQ"),
     ("spx", "#SP500"), ("s&p", "#SP500"),
     ("dji", "#DOWJONES"), ("dow", "#DOWJONES"),
     ("daxeur", "#DAX"), ("dax", "#DAX"),
+    ("crude", "#OIL"), ("oil", "#OIL"),
 ]
 
-# RULE 3 (lowest priority): single currency fallback if no pair found
 CURRENCY_FALLBACK_RULES = [
     (" usd ", "#USD"), ("dollar", "#USD"),
     (" eur ", "#EUR"), ("euro", "#EUR"),
@@ -79,6 +102,9 @@ CURRENCY_FALLBACK_RULES = [
     (" nzd ", "#NZD"),
 ]
 
+# -----------------------------
+# Helpers
+# -----------------------------
 def load_state():
     if not os.path.exists(STATE_FILE):
         return set()
@@ -100,36 +126,40 @@ def safe_text(s: str) -> str:
 def safe_url(url: str) -> str:
     return quote((url or "").strip(), safe=":/?&=#+@;%.,-_~")
 
-def has_any(term_list, text: str) -> bool:
+def contains_any(term_list, text: str) -> bool:
     t = (text or "").lower()
     return any(x in t for x in term_list)
 
-def is_high_impact(text: str) -> bool:
-    return has_any(HIGH_IMPACT_TERMS, text)
-
 def is_relevant(text: str) -> bool:
-    return has_any(RELEVANCE_TERMS, text)
+    return contains_any(RELEVANCE_TERMS, text)
+
+def is_high_impact(title: str, summary: str) -> bool:
+    t = f"{title} {summary}".lower()
+
+    # Strict Tier-1
+    if any(k in t for k in HIGH_IMPACT_TERMS):
+        return True
+
+    # Optional Tier-2 (disabled by default)
+    if ALLOW_TIER2 and any(k in t for k in HIGH_IMPACT_OPTIONAL):
+        return True
+
+    return False
 
 def detect_primary_hashtag(text: str) -> str:
-    """
-    ONE hashtag only:
-    1) FX pair if present
-    2) else metals/energy/indices
-    3) else single currency fallback
-    """
     lower = (text or "").lower()
 
-    # Pair first (fixes your EUR/USD -> #EURUSD issue)
+    # 1) FX pair first
     for needle, tag in PAIR_RULES:
         if needle in lower:
             return tag
 
-    # Non-FX assets
+    # 2) non-FX
     for needle, tag in NONFX_PRIMARY_RULES:
         if needle in lower:
             return tag
 
-    # Currency fallback (use spaces to reduce false matches)
+    # 3) single currency fallback
     padded = f" {lower} "
     for needle, tag in CURRENCY_FALLBACK_RULES:
         if needle in padded:
@@ -138,29 +168,33 @@ def detect_primary_hashtag(text: str) -> str:
     return ""
 
 def general_market_impact(text: str) -> str:
+    """
+    A single, cautious, educational line.
+    No entries, targets, stop-losses, or calls-to-action.
+    Uses can/could/often language.
+    """
     t = (text or "").lower()
 
-    if any(k in t for k in ["cpi", "inflation", "pce", "core inflation"]):
+    # Inflation
+    if any(k in t for k in ["cpi", "inflation", "pce", "core cpi", "core pce"]):
         if any(k in t for k in ["cool", "softer", "lower", "eased", "downside surprise"]):
-            return ("Softer inflation can strengthen rate-cut expectations, which often pressures the USD and can support gold and risk assets, "
-                    "though reactions vary.")
+            return "Softer inflation can strengthen rate-cut expectations, which often weighs on the USD and can support gold and risk assets."
         if any(k in t for k in ["hot", "higher", "sticky", "upside surprise", "accelerated"]):
-            return ("Hotter inflation can push rate expectations higher, which often supports the USD and can pressure gold and equities, "
-                    "though reactions vary.")
+            return "Hotter inflation can lift rate expectations, which often supports the USD and can pressure gold and rate-sensitive assets."
 
+    # Jobs
     if any(k in t for k in ["non-farm payroll", "nonfarm payroll", "nfp", "jobs report", "unemployment rate", "payrolls"]):
         if any(k in t for k in ["soft", "weaker", "cool", "slower", "edged higher", "missed"]):
-            return ("Softer jobs data can increase expectations of earlier rate cuts. That often weighs on the USD and can be supportive for gold "
-                    "and risk assets, though reactions vary.")
+            return "Softer jobs data can increase rate-cut expectations, which often weighs on the USD and can support gold and risk assets."
         if any(k in t for k in ["strong", "hot", "higher", "beat", "surprise to the upside"]):
-            return ("Stronger jobs data can reduce rate-cut expectations. That often supports the USD and can pressure gold and rate-sensitive assets, "
-                    "though reactions vary.")
+            return "Stronger jobs data can reduce rate-cut expectations, which often supports the USD and can pressure gold and rate-sensitive assets."
 
-    if any(k in t for k in ["rate decision", "interest rate decision", "fomc", "fed meeting", "ecb", "boe", "boj", "rba", "boc", "rbnz", "snb"]):
-        if any(k in t for k in ["cut", "dovish", "easing", "earlier cuts"]):
-            return ("A more dovish tone or rate-cut signal can weaken the currency and support risk assets, depending on expectations and guidance.")
-        if any(k in t for k in ["hike", "hawkish", "tightening", "higher for longer"]):
-            return ("A more hawkish tone can support the currency and pressure risk assets, depending on expectations and guidance.")
+    # Central bank decisions / guidance
+    if any(k in t for k in ["fomc", "federal reserve", "fed", "ecb", "boe", "boj", "rate decision", "press conference", "minutes", "powell"]):
+        if any(k in t for k in ["dovish", "cut", "easing", "earlier cuts"]):
+            return "A more dovish policy signal can weaken the currency and support risk assets, depending on expectations and guidance."
+        if any(k in t for k in ["hawkish", "hike", "tightening", "higher for longer"]):
+            return "A more hawkish policy signal can support the currency and pressure risk assets, depending on expectations and guidance."
 
     return ""
 
@@ -182,9 +216,12 @@ def build_message(source, title, summary, published, link):
     clean_summary = strip_html(summary or "")
     headline = safe_text((title or "Market update").strip())
 
-    happened_raw = (clean_summary or
-                    "No detailed summary was provided in the RSS feed. Please refer to the original source for full context.")
+    happened_raw = clean_summary or (
+        "No detailed summary was provided in the RSS feed. Please refer to the original source for full context."
+    )
     happened_raw = happened_raw.strip()
+
+    # Make "What happened?" readable
     if len(happened_raw) > 850:
         happened_raw = happened_raw[:850].rsplit(" ", 1)[0] + "..."
 
@@ -217,8 +254,10 @@ def build_message(source, title, summary, published, link):
         parts.append(f"🔗 <a href=\"{safe_url(link)}\">Read full article</a>\n")
 
     parts.append("⚖️ <b>Disclaimer</b>")
-    parts.append("<i>This content is a direct reference to the original source and is provided for informational and educational purposes only. "
-                 "It does not constitute trading or investment advice.</i>")
+    parts.append(
+        "<i>This content is a direct reference to the original source and is provided for informational and educational purposes only. "
+        "It does not constitute trading or investment advice.</i>"
+    )
 
     if tag:
         parts.append("\n" + tag)
@@ -246,13 +285,14 @@ def main():
 
             combined = f"{title} {summary} {link}"
 
-            # Only relevant + high impact
+            # Must be relevant AND high impact (strict)
             if not is_relevant(combined):
                 continue
-            if not is_high_impact(combined):
+            if not is_high_impact(title, summary):
                 continue
 
             msg = build_message(source, title, summary, published, link)
+
             if send_to_telegram(msg):
                 posted.add(uid)
 
