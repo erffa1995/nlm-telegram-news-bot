@@ -1,13 +1,14 @@
 import os
+import json
 import feedparser
 import requests
-import json
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL = os.getenv("TELEGRAM_CHANNEL")
 
 STATE_FILE = "state.json"
 
+# Strict scope keywords (symbols + common market words used in headlines)
 KEYWORDS = [
     # Forex Majors
     "eurusd", "gbpusd", "usdjpy", "usdchf",
@@ -28,9 +29,17 @@ KEYWORDS = [
 
     # Energy
     "brent", "brnusd",
-    "wti", "wtiusd", "crude oil"
+    "wti", "wtiusd", "crude oil",
+
+    # Common market wording (helps when symbols are not mentioned explicitly)
+    "euro", "pound", "sterling", "yen", "swiss franc", "loonie", "aussie", "kiwi",
+    "dollar", "u.s. dollar", "greenback",
+    "fed", "fomc", "ecb", "boe",
+    "cpi", "nfp", "inflation", "interest rates", "rate cut", "rate hike",
+    "risk-on", "risk-off"
 ]
 
+# RSS feeds (you can add more)
 FEEDS = {
     "FXStreet": "https://www.fxstreet.com/rss/news",
     "DailyFX": "https://www.dailyfx.com/feeds/market-news",
@@ -41,24 +50,28 @@ FEEDS = {
 def load_state():
     if not os.path.exists(STATE_FILE):
         return set()
-    with open(STATE_FILE, "r") as f:
+    with open(STATE_FILE, "r", encoding="utf-8") as f:
         return set(json.load(f))
 
 
-def save_state(ids):
-    with open(STATE_FILE, "w") as f:
-        json.dump(list(ids), f)
+def save_state(ids_set):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(ids_set), f)
 
 
-def is_relevant(text):
-    text = text.lower()
-    return any(k in text for k in KEYWORDS)
+def is_relevant(text: str) -> bool:
+    t = (text or "").lower()
+    return any(k in t for k in KEYWORDS)
 
 
-def detect_hashtags(text):
+def detect_hashtags(text: str) -> str:
+    """
+    Adds searchable tags to Telegram messages.
+    Purely classification/tagging (no analysis).
+    """
     tags = []
-
     mapping = {
+        # Forex majors
         "eurusd": "#EURUSD",
         "gbpusd": "#GBPUSD",
         "usdjpy": "#USDJPY",
@@ -66,32 +79,58 @@ def detect_hashtags(text):
         "audusd": "#AUDUSD",
         "usdcad": "#USDCAD",
         "nzdusd": "#NZDUSD",
+
+        # Forex crosses
         "eurgbp": "#EURGBP",
         "eurjpy": "#EURJPY",
         "gbpjpy": "#GBPJPY",
+
+        # Metals
         "xauusd": "#XAUUSD #GOLD",
         "gold": "#GOLD",
         "xagusd": "#XAGUSD #SILVER",
         "silver": "#SILVER",
+
+        # Indices
+        "daxeur": "#DAXEUR #DAX",
         "dax": "#DAX",
+        "dji": "#DJIUSD #DOWJONES",
         "dow": "#DOWJONES",
+        "ndx": "#NDXUSD #NASDAQ",
         "nasdaq": "#NASDAQ",
-        "ndx": "#NASDAQ",
-        "spx": "#SP500",
+        "spx": "#SPXUSD #SP500",
+        "s&p": "#SP500",
+
+        # Energy
+        "brnusd": "#BRNUSD #BRENT",
         "brent": "#BRENT",
+        "wtiusd": "#WTIUSD #WTI",
         "wti": "#WTI",
         "crude oil": "#OIL"
     }
 
-    lower = text.lower()
+    lower = (text or "").lower()
     for key, tag in mapping.items():
         if key in lower and tag not in tags:
             tags.append(tag)
 
-    return " ".join(tags)
+    # Add general category tags if relevant words appear (still not analysis)
+    category_tags = []
+    if any(x in lower for x in ["eurusd", "gbpusd", "usdjpy", "usdchf", "audusd", "usdcad", "nzdusd", "eurgbp", "eurjpy", "gbpjpy",
+                                "euro", "pound", "sterling", "yen", "swiss franc", "loonie", "aussie", "kiwi", "dollar", "greenback"]):
+        category_tags.append("#FOREX")
+    if any(x in lower for x in ["xauusd", "xagusd", "gold", "silver"]):
+        category_tags.append("#METALS")
+    if any(x in lower for x in ["dax", "daxeur", "dow", "dji", "nasdaq", "ndx", "s&p", "spx"]):
+        category_tags.append("#INDICES")
+    if any(x in lower for x in ["brent", "wti", "crude oil", "brnusd", "wtiusd"]):
+        category_tags.append("#ENERGY")
+
+    out = " ".join(tags + category_tags).strip()
+    return out
 
 
-def send_to_telegram(message):
+def send_to_telegram(message: str):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHANNEL,
@@ -99,7 +138,66 @@ def send_to_telegram(message):
         "parse_mode": "HTML",
         "disable_web_page_preview": False
     }
-    requests.post(url, json=payload)
+    r = requests.post(url, json=payload, timeout=30)
+    r.raise_for_status()
+
+
+def build_interpretive_message(
+    source: str,
+    title: str,
+    summary: str,
+    published: str,
+    link: str,
+    hashtags: str
+) -> str:
+    """
+    STRICT mode:
+    - Source-based summary only (no added interpretation)
+    - No forecasts
+    - No buy/sell signals
+    - Keeps content concise and readable
+    """
+
+    headline = (title or "").strip() or "Market update"
+    happened = (summary or "").strip()
+
+    # If RSS summary is missing/empty, we keep it honest and point to source
+    if not happened:
+        happened = "No summary provided in the RSS feed. Please refer to the source link for full context."
+
+    # Keep excerpts reasonably short to avoid long reposts
+    happened_excerpt = happened[:700] + ("..." if len(happened) > 700 else "")
+
+    msg_parts = []
+    msg_parts.append("✅ <b>MARKET NEWS</b> – <i>Source-based | No Signal | Practical for all traders</i>\n")
+
+    msg_parts.append("📰 <b>Headline</b>")
+    msg_parts.append(headline + "\n")
+
+    msg_parts.append("📌 <b>What happened?</b>")
+    msg_parts.append(happened_excerpt + "\n")
+
+    # We do NOT add: Why does this matter / Market sensitivity / Who should pay attention
+    # unless the source explicitly provides those in a structured way.
+    # (Keeping strict compliance with: “no added opinion/analysis”.)
+
+    msg_parts.append("🕒 <b>Source & time</b>")
+    # Most RSS 'published' is already UTC-like or includes timezone; we avoid converting to prevent errors.
+    msg_parts.append(f"<b>Source:</b> {source}")
+    msg_parts.append(f"<b>Date:</b> {published} (as provided by the source)\n")
+
+    msg_parts.append(f"🔗 <a href='{link}'>Read full article</a>\n")
+
+    msg_parts.append("⚖️ <b>Disclaimer</b>")
+    msg_parts.append(
+        "<i>This content is a direct reference to the original source and is provided for informational and educational purposes only. "
+        "It does not constitute trading or investment advice.</i>"
+    )
+
+    if hashtags:
+        msg_parts.append("\n" + hashtags)
+
+    return "\n".join(msg_parts)
 
 
 def main():
@@ -109,29 +207,31 @@ def main():
         feed = feedparser.parse(url)
 
         for entry in feed.entries:
-            uid = entry.get("id", entry.get("link"))
+            uid = entry.get("id") or entry.get("guid") or entry.get("link")
+            if not uid:
+                # If there's no stable ID/link, skip to avoid duplication issues
+                continue
             if uid in posted:
                 continue
 
-            title = entry.get("title", "")
-            summary = entry.get("summary", "") or ""
+            title = entry.get("title", "") or ""
+            summary = entry.get("summary", "") or entry.get("description", "") or ""
+            link = entry.get("link", "") or ""
+            published = entry.get("published", "") or entry.get("updated", "") or ""
 
-            if not is_relevant(title + " " + summary):
+            combined = f"{title} {summary} {link}"
+            if not is_relevant(combined):
                 continue
 
-            published = entry.get("published", "")
-            link = entry.get("link", "")
+            hashtags = detect_hashtags(combined)
 
-            hashtags = detect_hashtags(f"{title} {summary}")
-
-            message = (
-                f"<b>{title}</b>\n\n"
-                f"{summary[:500]}...\n\n"
-                f"<b>Source:</b> {source}\n"
-                f"<b>Date:</b> {published}\n"
-                f"<a href='{link}'>Read full article</a>\n\n"
-                f"<i>This content is a direct reference to the original source and does not constitute trading advice.</i>\n\n"
-                f"{hashtags}"
+            message = build_interpretive_message(
+                source=source,
+                title=title,
+                summary=summary,
+                published=published,
+                link=link,
+                hashtags=hashtags
             )
 
             send_to_telegram(message)
