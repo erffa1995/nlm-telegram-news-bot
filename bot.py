@@ -2,7 +2,6 @@ import os
 import feedparser
 import requests
 import json
-from datetime import datetime
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL = os.getenv("TELEGRAM_CHANNEL")
@@ -32,12 +31,12 @@ KEYWORDS = [
     "wti", "wtiusd", "crude oil"
 ]
 
-
 FEEDS = {
     "FXStreet": "https://www.fxstreet.com/rss/news",
     "DailyFX": "https://www.dailyfx.com/feeds/market-news",
     "Forexlive": "https://www.forexlive.com/feed/news/"
 }
+
 
 def load_state():
     if not os.path.exists(STATE_FILE):
@@ -45,23 +44,16 @@ def load_state():
     with open(STATE_FILE, "r") as f:
         return set(json.load(f))
 
+
 def save_state(ids):
     with open(STATE_FILE, "w") as f:
         json.dump(list(ids), f)
+
 
 def is_relevant(text):
     text = text.lower()
     return any(k in text for k in KEYWORDS)
 
-def send_to_telegram(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHANNEL,
-        "text": message,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": False
-    }
-    requests.post(url, json=payload)
 
 def detect_hashtags(text):
     tags = []
@@ -98,6 +90,18 @@ def detect_hashtags(text):
 
     return " ".join(tags)
 
+
+def send_to_telegram(message):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHANNEL,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": False
+    }
+    requests.post(url, json=payload)
+
+
 def main():
     posted = load_state()
 
@@ -110,29 +114,31 @@ def main():
                 continue
 
             title = entry.get("title", "")
-            summary = entry.get("summary", "")
+            summary = entry.get("summary", "") or ""
 
-            if not is_relevant(title + summary):
+            if not is_relevant(title + " " + summary):
                 continue
 
             published = entry.get("published", "")
             link = entry.get("link", "")
 
-      message = (
-    f"<b>{title}</b>\n\n"
-    f"{summary[:500]}...\n\n"
-    f"<b>Source:</b> {source}\n"
-    f"<b>Date:</b> {published}\n"
-    f"<a href='{link}'>Read full article</a>\n\n"
-    f"<i>This content is a direct reference to the original source and does not constitute trading advice.</i>"
-    f"\n\n{hashtags}"
-)
+            hashtags = detect_hashtags(f"{title} {summary}")
 
+            message = (
+                f"<b>{title}</b>\n\n"
+                f"{summary[:500]}...\n\n"
+                f"<b>Source:</b> {source}\n"
+                f"<b>Date:</b> {published}\n"
+                f"<a href='{link}'>Read full article</a>\n\n"
+                f"<i>This content is a direct reference to the original source and does not constitute trading advice.</i>\n\n"
+                f"{hashtags}"
+            )
 
             send_to_telegram(message)
             posted.add(uid)
 
     save_state(posted)
+
 
 if __name__ == "__main__":
     main()
