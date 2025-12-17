@@ -114,10 +114,12 @@ def detect_hashtags(text: str) -> str:
         if key in lower and tag not in tags:
             tags.append(tag)
 
-    # Add general category tags if relevant words appear (still not analysis)
+    # Add general category tags (still not analysis)
     category_tags = []
-    if any(x in lower for x in ["eurusd", "gbpusd", "usdjpy", "usdchf", "audusd", "usdcad", "nzdusd", "eurgbp", "eurjpy", "gbpjpy",
-                                "euro", "pound", "sterling", "yen", "swiss franc", "loonie", "aussie", "kiwi", "dollar", "greenback"]):
+    if any(x in lower for x in [
+        "eurusd", "gbpusd", "usdjpy", "usdchf", "audusd", "usdcad", "nzdusd", "eurgbp", "eurjpy", "gbpjpy",
+        "euro", "pound", "sterling", "yen", "swiss franc", "loonie", "aussie", "kiwi", "dollar", "greenback"
+    ]):
         category_tags.append("#FOREX")
     if any(x in lower for x in ["xauusd", "xagusd", "gold", "silver"]):
         category_tags.append("#METALS")
@@ -152,20 +154,19 @@ def build_interpretive_message(
 ) -> str:
     """
     STRICT mode:
-    - Source-based summary only (no added interpretation)
-    - No forecasts
+    - Source-based excerpt only (no added interpretation / forecasts)
     - No buy/sell signals
-    - Keeps content concise and readable
+    - Adds an ALWAYS-present "Who should pay attention" section,
+      but as a GENERAL educational note (not tied to this specific news).
     """
 
     headline = (title or "").strip() or "Market update"
     happened = (summary or "").strip()
 
-    # If RSS summary is missing/empty, we keep it honest and point to source
     if not happened:
         happened = "No summary provided in the RSS feed. Please refer to the source link for full context."
 
-    # Keep excerpts reasonably short to avoid long reposts
+    # Keep excerpt reasonably short to avoid long reposts
     happened_excerpt = happened[:700] + ("..." if len(happened) > 700 else "")
 
     msg_parts = []
@@ -177,12 +178,14 @@ def build_interpretive_message(
     msg_parts.append("📌 <b>What happened?</b>")
     msg_parts.append(happened_excerpt + "\n")
 
-    # We do NOT add: Why does this matter / Market sensitivity / Who should pay attention
-    # unless the source explicitly provides those in a structured way.
-    # (Keeping strict compliance with: “no added opinion/analysis”.)
+    # Always present, GENERAL, non-directional educational note
+    msg_parts.append("👥 <b>Who should pay attention</b>")
+    msg_parts.append("<i>Educational note (general):</i>")
+    msg_parts.append("Beginners: Focus on how scheduled news can change volatility and spreads (observe, don’t react fast).")
+    msg_parts.append("Active traders: Monitor liquidity conditions and the economic calendar timing (avoid decisions without context).")
+    msg_parts.append("Swing traders / Investors: Track whether the narrative connects to central bank policy or macro trends over weeks.\n")
 
     msg_parts.append("🕒 <b>Source & time</b>")
-    # Most RSS 'published' is already UTC-like or includes timezone; we avoid converting to prevent errors.
     msg_parts.append(f"<b>Source:</b> {source}")
     msg_parts.append(f"<b>Date:</b> {published} (as provided by the source)\n")
 
@@ -209,7 +212,6 @@ def main():
         for entry in feed.entries:
             uid = entry.get("id") or entry.get("guid") or entry.get("link")
             if not uid:
-                # If there's no stable ID/link, skip to avoid duplication issues
                 continue
             if uid in posted:
                 continue
