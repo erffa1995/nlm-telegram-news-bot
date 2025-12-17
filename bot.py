@@ -2,6 +2,8 @@ import os
 import json
 import feedparser
 import requests
+import html
+from urllib.parse import quote
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL = os.getenv("TELEGRAM_CHANNEL")
@@ -41,6 +43,9 @@ FEEDS = {
 # Fixed, general hashtags (same for all posts)
 GENERAL_HASHTAGS = "#MARKET_NEWS #FOREX #MACRO #EDUCATIONAL #NO_SIGNAL"
 
+# Telegram hard limit is 4096 chars; keep margin for safety
+MAX_MESSAGE_LEN = 3800
+
 
 def load_state():
     if not os.path.exists(STATE_FILE):
@@ -59,16 +64,44 @@ def is_relevant(text: str) -> bool:
     return any(k in t for k in KEYWORDS)
 
 
-def send_to_telegram(message: str):
+def safe_text(s: str) -> str:
+    """Escape text for Telegram HTML parse_mode."""
+    return html.escape(s or "", quote=False)
+
+
+def safe_url(url: str) -> str:
+    """
+    Make URL safer inside href. Keeps : / ? & = # but escapes spaces and odd chars.
+    """
+    url = (url or "").strip()
+    if not url:
+        return ""
+    return quote(url, safe=":/?&=#+@;%.,-_~")
+
+
+def send_to_telegram(message: str) -> bool:
+    """
+    Send message; if Telegram rejects due to HTML/entity issues, log details and skip that item
+    instead of failing the whole run.
+    """
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHANNEL,
-        "text": message,
+        "text": message[:MAX_MESSAGE_LEN],
         "parse_mode": "HTML",
         "disable_web_page_preview": False
     }
-    r = requests.post(url, json=payload, timeout=30)
-    r.raise_for_status()
+
+    try:
+        r = requests.post(url, json=payload, timeout=30)
+        if r.status_code != 200:
+            # Print Telegram error body to Actions logs
+            print("Telegram sendMessage failed:", r.status_code, r.text[:1000])
+            return False
+        return True
+    except Exception as e:
+        print("Telegram sendMessage exception:", repr(e))
+        return False
 
 
 def build_message(source, title, summary, published, link):
@@ -76,24 +109,30 @@ def build_message(source, title, summary, published, link):
     Strict source-based template.
     No personal analysis. No forecasts. No trading signals.
     """
+    headline = safe_text((title or "").strip() or "Market update")
 
-    headline = (title or "").strip() or "Market update"
-    happened = (summary or "").strip()
-
-    if not happened:
-        happened = (
+    # RSS summaries often include HTML. feedparser sometimes keeps it. We escape it.
+    happened_raw = (summary or "").strip()
+    if not happened_raw:
+        happened_raw = (
             "No detailed summary was provided in the RSS feed. "
             "Please refer to the original source for full context."
         )
 
+    happened = safe_text(happened_raw)
     happened_excerpt = happened[:700] + ("..." if len(happened) > 700 else "")
 
-    parts = []
+    src = safe_text(source or "")
+    dt = safe_text(published or "")
 
-    parts.append(
-        "✅ <b>MARKET NEWS</b> – "
-        "<i>Source-based | No Signal | Practical for all traders</i>\n"
-    )
+    href = safe_url(link)
+    if href:
+        read_more = f"🔗 <a href=\"{href}\">Read full article</a>\n"
+    else:
+        read_more = "🔗 Read full article (link unavailable)\n"
+
+    parts = []
+    parts.append("✅ <b>MARKET NEWS</b> – <i>Source-based | No Signal | Practical for all traders</i>\n")
 
     parts.append("📰 <b>Headline</b>")
     parts.append(headline + "\n")
@@ -101,7 +140,6 @@ def build_message(source, title, summary, published, link):
     parts.append("📌 <b>What happened?</b>")
     parts.append(happened_excerpt + "\n")
 
-    # General, neutral, non-directional
     parts.append("👥 <b>Who should pay attention</b>")
     parts.append(
         "Anyone following FX, metals, indices, or oil—especially around major "
@@ -109,10 +147,10 @@ def build_message(source, title, summary, published, link):
     )
 
     parts.append("🕒 <b>Source & time</b>")
-    parts.append(f"<b>Source:</b> {source}")
-    parts.append(f"<b>Date:</b> {published} (as provided by the source)\n")
+    parts.append(f"<b>Source:</b> {src}")
+    parts.append(f"<b>Date:</b> {dt} (as provided by the source)\n")
 
-    parts.append(f"🔗 <a href='{link}'>Read full article</a>\n")
+    parts.append(read_more)
 
     parts.append("⚖️ <b>Disclaimer</b>")
     parts.append(
@@ -123,7 +161,13 @@ def build_message(source, title, summary, published, link):
 
     parts.append(GENERAL_HASHTAGS)
 
-    return "\n".join(parts)
+    msg = "\n".join(parts)
+
+    # Final safety trim
+    if len(msg) > MAX_MESSAGE_LEN:
+        msg = msg[:MAX_MESSAGE_LEN - 3] + "..."
+
+    return msg
 
 
 def main():
@@ -154,8 +198,12 @@ def main():
                 link=link
             )
 
-            send_to_telegram(message)
-            posted.add(uid)
+            ok = send_to_telegram(message)
+            if ok:
+                posted.add(uid)
+            else:
+                # Skip this item (don’t mark as posted so it can be retried later if needed)
+                print("Skipped item due to Telegram error. UID:", uid)
 
     save_state(posted)
 
