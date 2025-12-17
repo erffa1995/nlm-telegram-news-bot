@@ -10,11 +10,28 @@ CHANNEL = os.getenv("TELEGRAM_CHANNEL")
 STATE_FILE = "state.json"
 
 KEYWORDS = [
-    "forex", "usd", "eur", "gbp", "jpy",
-    "gold", "silver", "xau", "xag",
-    "dax", "dow", "nasdaq", "s&p",
-    "brent", "wti", "oil"
+    # Forex Majors
+    "eurusd", "gbpusd", "usdjpy", "usdchf",
+    "audusd", "usdcad", "nzdusd",
+
+    # Forex Crosses
+    "eurgbp", "eurjpy", "gbpjpy",
+
+    # Spot Metals
+    "xauusd", "gold",
+    "xagusd", "silver",
+
+    # Indices
+    "dax", "daxeur",
+    "dow", "dji",
+    "nasdaq", "ndx",
+    "s&p", "spx",
+
+    # Energy
+    "brent", "brnusd",
+    "wti", "wtiusd", "crude oil"
 ]
+
 
 FEEDS = {
     "FXStreet": "https://www.fxstreet.com/rss/news",
@@ -46,6 +63,41 @@ def send_to_telegram(message):
     }
     requests.post(url, json=payload)
 
+def detect_hashtags(text):
+    tags = []
+
+    mapping = {
+        "eurusd": "#EURUSD",
+        "gbpusd": "#GBPUSD",
+        "usdjpy": "#USDJPY",
+        "usdchf": "#USDCHF",
+        "audusd": "#AUDUSD",
+        "usdcad": "#USDCAD",
+        "nzdusd": "#NZDUSD",
+        "eurgbp": "#EURGBP",
+        "eurjpy": "#EURJPY",
+        "gbpjpy": "#GBPJPY",
+        "xauusd": "#XAUUSD #GOLD",
+        "gold": "#GOLD",
+        "xagusd": "#XAGUSD #SILVER",
+        "silver": "#SILVER",
+        "dax": "#DAX",
+        "dow": "#DOWJONES",
+        "nasdaq": "#NASDAQ",
+        "ndx": "#NASDAQ",
+        "spx": "#SP500",
+        "brent": "#BRENT",
+        "wti": "#WTI",
+        "crude oil": "#OIL"
+    }
+
+    lower = text.lower()
+    for key, tag in mapping.items():
+        if key in lower and tag not in tags:
+            tags.append(tag)
+
+    return " ".join(tags)
+
 def main():
     posted = load_state()
 
@@ -66,14 +118,16 @@ def main():
             published = entry.get("published", "")
             link = entry.get("link", "")
 
-            message = (
-                f"<b>{title}</b>\n\n"
-                f"{summary[:500]}...\n\n"
-                f"<b>Source:</b> {source}\n"
-                f"<b>Date:</b> {published}\n"
-                f"<a href='{link}'>Read full article</a>\n\n"
-                f"<i>This content is a direct reference to the original source and does not constitute trading advice.</i>"
-            )
+      message = (
+    f"<b>{title}</b>\n\n"
+    f"{summary[:500]}...\n\n"
+    f"<b>Source:</b> {source}\n"
+    f"<b>Date:</b> {published}\n"
+    f"<a href='{link}'>Read full article</a>\n\n"
+    f"<i>This content is a direct reference to the original source and does not constitute trading advice.</i>"
+    f"\n\n{hashtags}"
+)
+
 
             send_to_telegram(message)
             posted.add(uid)
