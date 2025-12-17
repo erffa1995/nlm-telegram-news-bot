@@ -18,58 +18,65 @@ FEEDS = {
     "Forexlive": "https://www.forexlive.com/feed/news/"
 }
 
-# 1) HIGH IMPACT ONLY (keyword-based)
-# Keep this list tight to avoid noise.
+# HIGH IMPACT ONLY (keyword-based)
 HIGH_IMPACT_TERMS = [
     "cpi", "inflation", "core inflation", "pce",
     "non-farm payroll", "nonfarm payroll", "nfp", "payrolls",
     "unemployment rate", "jobs report", "employment",
     "fomc", "fed meeting", "federal reserve",
     "interest rate decision", "rate decision", "rate hike", "rate cut",
-    "ecb", "boe", "boj", "sn b", "snb", "rba", "boc", "rbnz",
+    "ecb", "boe", "boj", "snb", "rba", "boc", "rbnz",
     "gdp", "pmi",
-    "cpi report", "pce report"
 ]
 
-# 2) Relevance filter (markets you care about)
+# Relevance filter (markets you care about)
 RELEVANCE_TERMS = [
-    # FX / major currencies
     "usd", "eur", "gbp", "jpy", "chf", "aud", "cad", "nzd",
     "dollar", "euro", "pound", "sterling", "yen",
-
-    # Metals
     "gold", "silver", "xau", "xag",
-
-    # Indices
     "dax", "dow", "nasdaq", "s&p", "spx", "ndx",
-
-    # Energy
-    "oil", "brent", "wti", "crude"
+    "oil", "brent", "wti", "crude",
+    "fed", "fomc", "ecb", "boe", "cpi", "nfp", "inflation", "rate"
 ]
 
-# 3) Single hashtag: only the primary asset of the news (ONE hashtag only)
-# Order matters: first match wins.
-PRIMARY_ASSET_RULES = [
-    # Spot metals
+# --- Hashtag rules ---
+# RULE 1 (highest priority): if a major FX pair appears, hashtag the pair (ONE tag)
+PAIR_RULES = [
+    ("eur/usd", "#EURUSD"), ("eurusd", "#EURUSD"),
+    ("gbp/usd", "#GBPUSD"), ("gbpusd", "#GBPUSD"),
+    ("usd/jpy", "#USDJPY"), ("usdjpy", "#USDJPY"),
+    ("usd/chf", "#USDCHF"), ("usdchf", "#USDCHF"),
+    ("aud/usd", "#AUDUSD"), ("audusd", "#AUDUSD"),
+    ("usd/cad", "#USDCAD"), ("usdcad", "#USDCAD"),
+    ("nzd/usd", "#NZDUSD"), ("nzdusd", "#NZDUSD"),
+    ("eur/gbp", "#EURGBP"), ("eurgbp", "#EURGBP"),
+    ("eur/jpy", "#EURJPY"), ("eurjpy", "#EURJPY"),
+    ("gbp/jpy", "#GBPJPY"), ("gbpjpy", "#GBPJPY"),
+]
+
+# RULE 2: non-FX assets (metals, energy, indices)
+NONFX_PRIMARY_RULES = [
     ("xauusd", "#GOLD"), ("gold", "#GOLD"),
     ("xagusd", "#SILVER"), ("silver", "#SILVER"),
-
-    # Energy
     ("wtiusd", "#WTI"), ("wti", "#WTI"),
     ("brnusd", "#BRENT"), ("brent", "#BRENT"),
     ("crude", "#OIL"), ("oil", "#OIL"),
-
-    # Indices
     ("ndx", "#NASDAQ"), ("nasdaq", "#NASDAQ"),
     ("spx", "#SP500"), ("s&p", "#SP500"),
     ("dji", "#DOWJONES"), ("dow", "#DOWJONES"),
     ("daxeur", "#DAX"), ("dax", "#DAX"),
+]
 
-    # FX (if a specific currency dominates)
-    ("eurusd", "#EUR"), ("euro", "#EUR"), (" eur ", "#EUR"),
-    ("gbpusd", "#GBP"), ("sterling", "#GBP"), (" pound ", "#GBP"),
-    ("usdjpy", "#JPY"), (" yen ", "#JPY"),
-    ("usd", "#USD"), ("dollar", "#USD"),
+# RULE 3 (lowest priority): single currency fallback if no pair found
+CURRENCY_FALLBACK_RULES = [
+    (" usd ", "#USD"), ("dollar", "#USD"),
+    (" eur ", "#EUR"), ("euro", "#EUR"),
+    (" gbp ", "#GBP"), ("pound", "#GBP"), ("sterling", "#GBP"),
+    (" jpy ", "#JPY"), ("yen", "#JPY"),
+    (" chf ", "#CHF"),
+    (" aud ", "#AUD"),
+    (" cad ", "#CAD"),
+    (" nzd ", "#NZD"),
 ]
 
 def load_state():
@@ -104,55 +111,58 @@ def is_relevant(text: str) -> bool:
     return has_any(RELEVANCE_TERMS, text)
 
 def detect_primary_hashtag(text: str) -> str:
+    """
+    ONE hashtag only:
+    1) FX pair if present
+    2) else metals/energy/indices
+    3) else single currency fallback
+    """
     lower = (text or "").lower()
-    for needle, tag in PRIMARY_ASSET_RULES:
+
+    # Pair first (fixes your EUR/USD -> #EURUSD issue)
+    for needle, tag in PAIR_RULES:
         if needle in lower:
             return tag
-    return ""  # If nothing matches, no hashtag.
 
-# 4) General impact (public, conditional, no signal)
+    # Non-FX assets
+    for needle, tag in NONFX_PRIMARY_RULES:
+        if needle in lower:
+            return tag
+
+    # Currency fallback (use spaces to reduce false matches)
+    padded = f" {lower} "
+    for needle, tag in CURRENCY_FALLBACK_RULES:
+        if needle in padded:
+            return tag
+
+    return ""
+
 def general_market_impact(text: str) -> str:
-    """
-    Very light, educational mapping.
-    Uses cautious language: could / may / often.
-    No entries, targets, stop-loss, or instructions.
-    """
     t = (text or "").lower()
 
-    # Labor market / jobs softening -> earlier cuts expectations
-    if any(k in t for k in ["non-farm payroll", "nonfarm payroll", "nfp", "jobs report", "unemployment rate", "payrolls"]):
-        if any(k in t for k in ["soft", "weaker", "cool", "slower", "rise in unemployment", "edged higher", "missed"]):
-            return ("Softer jobs data can increase expectations of earlier rate cuts. "
-                    "That often weighs on the USD and can be supportive for gold and risk assets, though reactions vary.")
-        if any(k in t for k in ["strong", "hot", "higher", "beat", "surprise to the upside"]):
-            return ("Stronger jobs data can reduce rate-cut expectations. "
-                    "That often supports the USD and can pressure gold and rate-sensitive assets, though reactions vary.")
-
-    # Inflation / CPI / PCE
     if any(k in t for k in ["cpi", "inflation", "pce", "core inflation"]):
         if any(k in t for k in ["cool", "softer", "lower", "eased", "downside surprise"]):
-            return ("Softer inflation can strengthen rate-cut expectations. "
-                    "That often pressures the USD and can support gold and equities, though reactions vary.")
+            return ("Softer inflation can strengthen rate-cut expectations, which often pressures the USD and can support gold and risk assets, "
+                    "though reactions vary.")
         if any(k in t for k in ["hot", "higher", "sticky", "upside surprise", "accelerated"]):
-            return ("Hotter inflation can push rate expectations higher. "
-                    "That often supports the USD and can pressure gold and equities, though reactions vary.")
+            return ("Hotter inflation can push rate expectations higher, which often supports the USD and can pressure gold and equities, "
+                    "though reactions vary.")
 
-    # Rate decisions / central banks
+    if any(k in t for k in ["non-farm payroll", "nonfarm payroll", "nfp", "jobs report", "unemployment rate", "payrolls"]):
+        if any(k in t for k in ["soft", "weaker", "cool", "slower", "edged higher", "missed"]):
+            return ("Softer jobs data can increase expectations of earlier rate cuts. That often weighs on the USD and can be supportive for gold "
+                    "and risk assets, though reactions vary.")
+        if any(k in t for k in ["strong", "hot", "higher", "beat", "surprise to the upside"]):
+            return ("Stronger jobs data can reduce rate-cut expectations. That often supports the USD and can pressure gold and rate-sensitive assets, "
+                    "though reactions vary.")
+
     if any(k in t for k in ["rate decision", "interest rate decision", "fomc", "fed meeting", "ecb", "boe", "boj", "rba", "boc", "rbnz", "snb"]):
         if any(k in t for k in ["cut", "dovish", "easing", "earlier cuts"]):
-            return ("A more dovish tone or rate-cut signal can weaken the currency and support risk assets, "
-                    "depending on market positioning and forward guidance.")
+            return ("A more dovish tone or rate-cut signal can weaken the currency and support risk assets, depending on expectations and guidance.")
         if any(k in t for k in ["hike", "hawkish", "tightening", "higher for longer"]):
-            return ("A more hawkish tone or higher-for-longer signal can support the currency and pressure risk assets, "
-                    "depending on expectations and guidance.")
+            return ("A more hawkish tone can support the currency and pressure risk assets, depending on expectations and guidance.")
 
-    # Oil-specific (if high impact related to supply shocks, geopolitics—often appears in high impact feeds)
-    if any(k in t for k in ["wti", "brent", "oil", "crude"]):
-        if any(k in t for k in ["supply", "opec", "disruption", "geopolitical", "sanctions"]):
-            return ("Supply risks or disruptions can be supportive for oil prices, while improving supply expectations can pressure prices. "
-                    "Market reaction often depends on inventories and demand signals.")
-
-    return ""  # if we can't say something safely, we say nothing.
+    return ""
 
 def send_to_telegram(message: str) -> bool:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -172,11 +182,8 @@ def build_message(source, title, summary, published, link):
     clean_summary = strip_html(summary or "")
     headline = safe_text((title or "Market update").strip())
 
-    happened_raw = clean_summary or (
-        "No detailed summary was provided in the RSS feed. Please refer to the original source for full context."
-    )
-
-    # Keep it readable: short excerpt, not raw dump
+    happened_raw = (clean_summary or
+                    "No detailed summary was provided in the RSS feed. Please refer to the original source for full context.")
     happened_raw = happened_raw.strip()
     if len(happened_raw) > 850:
         happened_raw = happened_raw[:850].rsplit(" ", 1)[0] + "..."
@@ -210,10 +217,8 @@ def build_message(source, title, summary, published, link):
         parts.append(f"🔗 <a href=\"{safe_url(link)}\">Read full article</a>\n")
 
     parts.append("⚖️ <b>Disclaimer</b>")
-    parts.append(
-        "<i>This content is a direct reference to the original source and is provided for informational and educational purposes only. "
-        "It does not constitute trading or investment advice.</i>"
-    )
+    parts.append("<i>This content is a direct reference to the original source and is provided for informational and educational purposes only. "
+                 "It does not constitute trading or investment advice.</i>")
 
     if tag:
         parts.append("\n" + tag)
