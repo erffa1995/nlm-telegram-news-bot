@@ -6,8 +6,9 @@ import html
 import re
 from urllib.parse import quote
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL = os.getenv("TELEGRAM_CHANNEL")
+# ✅ NEWS BOT secrets (new)
+BOT_TOKEN = os.getenv("NEWS_BOT_TOKEN")
+CHANNEL = os.getenv("NEWS_CHANNEL")
 
 STATE_FILE = "state.json"
 MAX_MESSAGE_LEN = 3800
@@ -18,9 +19,7 @@ FEEDS = {
     "Forexlive": "https://www.forexlive.com/feed/news/"
 }
 
-# -----------------------------
 # STRICT HIGH IMPACT FILTER
-# -----------------------------
 HIGH_IMPACT_TERMS = [
     "cpi", "core cpi", "pce", "core pce", "inflation",
     "non-farm payroll", "nonfarm payroll", "nfp", "payrolls",
@@ -32,9 +31,7 @@ HIGH_IMPACT_TERMS = [
     "press conference"
 ]
 
-# -----------------------------
 # RELEVANCE FILTER
-# -----------------------------
 RELEVANCE_TERMS = [
     "eur", "usd", "gbp", "jpy", "chf", "aud", "cad", "nzd",
     "eur/usd", "gbp/usd", "usd/jpy", "usd/chf",
@@ -43,9 +40,7 @@ RELEVANCE_TERMS = [
     "oil", "brent", "wti", "crude"
 ]
 
-# -----------------------------
 # PRIMARY ASSET DETECTION
-# -----------------------------
 PAIR_RULES = [
     ("eur/usd", "EURUSD"), ("eurusd", "EURUSD"),
     ("gbp/usd", "GBPUSD"), ("gbpusd", "GBPUSD"),
@@ -64,9 +59,6 @@ NONFX_PRIMARY_RULES = [
     ("oil", "OIL"),
 ]
 
-# -----------------------------
-# HELPERS
-# -----------------------------
 def load_state():
     if not os.path.exists(STATE_FILE):
         return set()
@@ -109,15 +101,17 @@ def detect_primary_asset(text):
 
 def infer_direction(text):
     t = (text or "").lower()
-    if any(w in t for w in ["rise", "rises", "gains", "strengthens"]):
+    if any(w in t for w in ["rises", "rise", "gains", "gain", "strengthens", "surges", "jumps", "climbs"]):
         return "Higher / strengthening"
-    if any(w in t for w in ["fall", "falls", "drops", "weakens"]):
+    if any(w in t for w in ["falls", "fall", "drops", "drop", "weakens", "slides", "declines", "tumbles"]):
         return "Lower / weakening"
-    if any(w in t for w in ["pause", "pauses", "range-bound", "flat"]):
+    if any(w in t for w in ["pauses", "pause", "range-bound", "range bound", "flat", "stalls", "steady"]):
         return "Paused / range-bound"
     return "Direction not explicitly stated"
 
 def send_to_telegram(msg):
+    if not BOT_TOKEN or not CHANNEL:
+        raise RuntimeError("Missing NEWS_BOT_TOKEN or NEWS_CHANNEL secrets.")
     r = requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
         json={
@@ -128,24 +122,32 @@ def send_to_telegram(msg):
         },
         timeout=30,
     )
-    return r.status_code == 200
+    if r.status_code != 200:
+        print("Telegram error:", r.status_code, r.text[:800])
+        return False
+    return True
 
 def build_message(source, title, summary, published, link):
     clean_summary = strip_html(summary)
-    combined = f"{title} {summary}"
+    combined = f"{title} {summary} {link}"
 
     asset = detect_primary_asset(combined)
     direction = infer_direction(combined)
+
+    # Keep it readable
+    happened = clean_summary
+    if len(happened) > 850:
+        happened = happened[:850].rsplit(" ", 1)[0] + "..."
 
     parts = [
         "✅ <b>MARKET NEWS</b>\n",
         "📰 <b>Headline</b>",
         safe_text(title) + "\n",
         "📌 <b>What happened?</b>",
-        safe_text(clean_summary) + "\n",
+        safe_text(happened) + "\n",
         "📊 <b>Impact</b>",
-        f"<b>Asset:</b> {asset or 'N/A'}",
-        f"<b>Direction:</b> {direction}\n",
+        f"<b>Asset:</b> {safe_text(asset or 'N/A')}",
+        f"<b>Direction:</b> {safe_text(direction)}\n",
         "🕒 <b>Source & time</b>",
         f"<b>Source:</b> {safe_text(source)}",
         f"<b>Date:</b> {safe_text(published)}\n",
@@ -155,7 +157,8 @@ def build_message(source, title, summary, published, link):
     if asset:
         parts.append(f"\n#{asset}")
 
-    return "\n".join(parts)
+    msg = "\n".join(parts)
+    return msg[:MAX_MESSAGE_LEN]
 
 def main():
     posted = load_state()
@@ -163,16 +166,17 @@ def main():
     for source, url in FEEDS.items():
         feed = feedparser.parse(url)
         for e in feed.entries:
-            uid = e.get("id") or e.get("link")
+            uid = e.get("id") or e.get("guid") or e.get("link")
             if not uid or uid in posted:
                 continue
 
-            title = e.get("title", "")
-            summary = e.get("summary", "")
-            link = e.get("link", "")
-            published = e.get("published", "")
+            title = e.get("title", "") or ""
+            summary = e.get("summary", "") or e.get("description", "") or ""
+            link = e.get("link", "") or ""
+            published = e.get("published", "") or e.get("updated", "") or ""
 
-            combined = f"{title} {summary}"
+            combined = f"{title} {summary} {link}"
+
             if not is_relevant(combined):
                 continue
             if not is_high_impact(title, summary):
