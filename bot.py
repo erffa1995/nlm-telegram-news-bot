@@ -6,7 +6,7 @@ import html
 import re
 from urllib.parse import quote
 
-# ✅ NEWS BOT secrets (new)
+# NEWS BOT secrets
 BOT_TOKEN = os.getenv("NEWS_BOT_TOKEN")
 CHANNEL = os.getenv("NEWS_CHANNEL")
 
@@ -19,7 +19,6 @@ FEEDS = {
     "Forexlive": "https://www.forexlive.com/feed/news/"
 }
 
-# STRICT HIGH IMPACT FILTER
 HIGH_IMPACT_TERMS = [
     "cpi", "core cpi", "pce", "core pce", "inflation",
     "non-farm payroll", "nonfarm payroll", "nfp", "payrolls",
@@ -31,7 +30,6 @@ HIGH_IMPACT_TERMS = [
     "press conference"
 ]
 
-# RELEVANCE FILTER
 RELEVANCE_TERMS = [
     "eur", "usd", "gbp", "jpy", "chf", "aud", "cad", "nzd",
     "eur/usd", "gbp/usd", "usd/jpy", "usd/chf",
@@ -40,7 +38,6 @@ RELEVANCE_TERMS = [
     "oil", "brent", "wti", "crude"
 ]
 
-# PRIMARY ASSET DETECTION
 PAIR_RULES = [
     ("eur/usd", "EURUSD"), ("eurusd", "EURUSD"),
     ("gbp/usd", "GBPUSD"), ("gbpusd", "GBPUSD"),
@@ -59,35 +56,44 @@ NONFX_PRIMARY_RULES = [
     ("oil", "OIL"),
 ]
 
+
 def load_state():
     if not os.path.exists(STATE_FILE):
         return set()
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         return set(json.load(f))
 
+
 def save_state(ids):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(list(ids), f)
 
+
 def strip_html(text):
     return re.sub(r"\s+", " ", re.sub(r"<.*?>", "", text or "")).strip()
+
 
 def safe_text(s):
     return html.escape(s or "", quote=False)
 
+
 def safe_url(url):
     return quote((url or "").strip(), safe=":/?&=#+@;%.,-_~")
+
 
 def contains_any(lst, text):
     t = (text or "").lower()
     return any(x in t for x in lst)
 
+
 def is_relevant(text):
     return contains_any(RELEVANCE_TERMS, text)
+
 
 def is_high_impact(title, summary):
     t = f"{title} {summary}".lower()
     return any(k in t for k in HIGH_IMPACT_TERMS)
+
 
 def detect_primary_asset(text):
     t = (text or "").lower()
@@ -99,6 +105,7 @@ def detect_primary_asset(text):
             return v
     return ""
 
+
 def infer_direction(text):
     t = (text or "").lower()
     if any(w in t for w in ["rises", "rise", "gains", "gain", "strengthens", "surges", "jumps", "climbs"]):
@@ -108,6 +115,7 @@ def infer_direction(text):
     if any(w in t for w in ["pauses", "pause", "range-bound", "range bound", "flat", "stalls", "steady"]):
         return "Paused / range-bound"
     return "Direction not explicitly stated"
+
 
 def send_to_telegram(msg):
     if not BOT_TOKEN or not CHANNEL:
@@ -127,6 +135,7 @@ def send_to_telegram(msg):
         return False
     return True
 
+
 def build_message(source, title, summary, published, link):
     clean_summary = strip_html(summary)
     combined = f"{title} {summary} {link}"
@@ -134,7 +143,6 @@ def build_message(source, title, summary, published, link):
     asset = detect_primary_asset(combined)
     direction = infer_direction(combined)
 
-    # Keep it readable
     happened = clean_summary
     if len(happened) > 850:
         happened = happened[:850].rsplit(" ", 1)[0] + "..."
@@ -159,6 +167,7 @@ def build_message(source, title, summary, published, link):
 
     msg = "\n".join(parts)
     return msg[:MAX_MESSAGE_LEN]
+
 
 def main():
     posted = load_state()
@@ -187,6 +196,7 @@ def main():
                 posted.add(uid)
 
     save_state(posted)
+
 
 if __name__ == "__main__":
     main()
