@@ -30,18 +30,14 @@ HIGH_IMPACT_TERMS = [
     "unemployment rate", "jobs report",
 
     # Fed / FOMC (Tier 1)
-    "fomc", "federal reserve", "fed rate", "rate decision",
-    "fed statement", "fed minutes", "powell",
+    "fomc", "fed minutes", "fed statement", "powell",
+    "federal reserve", "fed rate", "rate decision", "interest rate decision",
 
     # Major CB decisions (Tier 1)
     "ecb rate", "boe rate", "boj rate",
     "ecb meeting", "boe meeting", "boj meeting",
     "press conference"
 ]
-
-# Optional Tier 2 (OFF by default)
-HIGH_IMPACT_OPTIONAL = ["gdp", "pmi"]
-ALLOW_TIER2 = False  # keep strict
 
 # -----------------------------
 # RELEVANCE FILTER (markets you want)
@@ -63,43 +59,43 @@ RELEVANCE_TERMS = [
 ]
 
 # -----------------------------
-# ONE HASHTAG ONLY (primary asset)
-# Priority: FX pair > non-FX asset > single currency fallback
+# Primary asset detection (ONE hashtag only)
+# Priority: FX pair > non-FX asset > currency fallback
 # -----------------------------
 PAIR_RULES = [
-    ("eur/usd", "#EURUSD"), ("eurusd", "#EURUSD"),
-    ("gbp/usd", "#GBPUSD"), ("gbpusd", "#GBPUSD"),
-    ("usd/jpy", "#USDJPY"), ("usdjpy", "#USDJPY"),
-    ("usd/chf", "#USDCHF"), ("usdchf", "#USDCHF"),
-    ("aud/usd", "#AUDUSD"), ("audusd", "#AUDUSD"),
-    ("usd/cad", "#USDCAD"), ("usdcad", "#USDCAD"),
-    ("nzd/usd", "#NZDUSD"), ("nzdusd", "#NZDUSD"),
-    ("eur/gbp", "#EURGBP"), ("eurgbp", "#EURGBP"),
-    ("eur/jpy", "#EURJPY"), ("eurjpy", "#EURJPY"),
-    ("gbp/jpy", "#GBPJPY"), ("gbpjpy", "#GBPJPY"),
+    ("eur/usd", "EURUSD"), ("eurusd", "EURUSD"),
+    ("gbp/usd", "GBPUSD"), ("gbpusd", "GBPUSD"),
+    ("usd/jpy", "USDJPY"), ("usdjpy", "USDJPY"),
+    ("usd/chf", "USDCHF"), ("usdchf", "USDCHF"),
+    ("aud/usd", "AUDUSD"), ("audusd", "AUDUSD"),
+    ("usd/cad", "USDCAD"), ("usdcad", "USDCAD"),
+    ("nzd/usd", "NZDUSD"), ("nzdusd", "NZDUSD"),
+    ("eur/gbp", "EURGBP"), ("eurgbp", "EURGBP"),
+    ("eur/jpy", "EURJPY"), ("eurjpy", "EURJPY"),
+    ("gbp/jpy", "GBPJPY"), ("gbpjpy", "GBPJPY"),
 ]
 
 NONFX_PRIMARY_RULES = [
-    ("xauusd", "#GOLD"), ("gold", "#GOLD"),
-    ("xagusd", "#SILVER"), ("silver", "#SILVER"),
-    ("wtiusd", "#WTI"), ("wti", "#WTI"),
-    ("brnusd", "#BRENT"), ("brent", "#BRENT"),
-    ("ndx", "#NASDAQ"), ("nasdaq", "#NASDAQ"),
-    ("spx", "#SP500"), ("s&p", "#SP500"),
-    ("dji", "#DOWJONES"), ("dow", "#DOWJONES"),
-    ("daxeur", "#DAX"), ("dax", "#DAX"),
-    ("crude", "#OIL"), ("oil", "#OIL"),
+    ("xauusd", "GOLD"), ("gold", "GOLD"),
+    ("xagusd", "SILVER"), ("silver", "SILVER"),
+    ("wtiusd", "WTI"), ("wti", "WTI"),
+    ("brnusd", "BRENT"), ("brent", "BRENT"),
+    ("ndx", "NASDAQ"), ("nasdaq", "NASDAQ"),
+    ("spx", "SP500"), ("s&p", "SP500"),
+    ("dji", "DOWJONES"), ("dow", "DOWJONES"),
+    ("daxeur", "DAX"), ("dax", "DAX"),
+    ("crude", "OIL"), ("oil", "OIL"),
 ]
 
 CURRENCY_FALLBACK_RULES = [
-    (" usd ", "#USD"), ("dollar", "#USD"),
-    (" eur ", "#EUR"), ("euro", "#EUR"),
-    (" gbp ", "#GBP"), ("pound", "#GBP"), ("sterling", "#GBP"),
-    (" jpy ", "#JPY"), ("yen", "#JPY"),
-    (" chf ", "#CHF"),
-    (" aud ", "#AUD"),
-    (" cad ", "#CAD"),
-    (" nzd ", "#NZD"),
+    (" usd ", "USD"), ("dollar", "USD"),
+    (" eur ", "EUR"), ("euro", "EUR"),
+    (" gbp ", "GBP"), ("pound", "GBP"), ("sterling", "GBP"),
+    (" jpy ", "JPY"), ("yen", "JPY"),
+    (" chf ", "CHF"),
+    (" aud ", "AUD"),
+    (" cad ", "CAD"),
+    (" nzd ", "NZD"),
 ]
 
 # -----------------------------
@@ -135,68 +131,119 @@ def is_relevant(text: str) -> bool:
 
 def is_high_impact(title: str, summary: str) -> bool:
     t = f"{title} {summary}".lower()
+    return any(k in t for k in HIGH_IMPACT_TERMS)
 
-    # Strict Tier-1
-    if any(k in t for k in HIGH_IMPACT_TERMS):
-        return True
-
-    # Optional Tier-2 (disabled by default)
-    if ALLOW_TIER2 and any(k in t for k in HIGH_IMPACT_OPTIONAL):
-        return True
-
-    return False
-
-def detect_primary_hashtag(text: str) -> str:
+def detect_primary_asset(text: str) -> str:
     lower = (text or "").lower()
 
-    # 1) FX pair first
-    for needle, tag in PAIR_RULES:
+    for needle, sym in PAIR_RULES:
         if needle in lower:
-            return tag
+            return sym
 
-    # 2) non-FX
-    for needle, tag in NONFX_PRIMARY_RULES:
+    for needle, sym in NONFX_PRIMARY_RULES:
         if needle in lower:
-            return tag
+            return sym
 
-    # 3) single currency fallback
     padded = f" {lower} "
-    for needle, tag in CURRENCY_FALLBACK_RULES:
+    for needle, sym in CURRENCY_FALLBACK_RULES:
         if needle in padded:
-            return tag
+            return sym
 
     return ""
 
-def general_market_impact(text: str) -> str:
+def primary_hashtag(asset: str) -> str:
+    return f"#{asset}" if asset else ""
+
+def infer_direction(text: str, primary: str) -> str:
     """
-    A single, cautious, educational line.
-    No entries, targets, stop-losses, or calls-to-action.
-    Uses can/could/often language.
+    Direction inferred only from explicit wording in title/summary.
+    Returns: UP / DOWN / NEUTRAL / VOLATILITY / UNCLEAR
     """
     t = (text or "").lower()
 
-    # Inflation
-    if any(k in t for k in ["cpi", "inflation", "pce", "core cpi", "core pce"]):
-        if any(k in t for k in ["cool", "softer", "lower", "eased", "downside surprise"]):
-            return "Softer inflation can strengthen rate-cut expectations, which often weighs on the USD and can support gold and risk assets."
-        if any(k in t for k in ["hot", "higher", "sticky", "upside surprise", "accelerated"]):
-            return "Hotter inflation can lift rate expectations, which often supports the USD and can pressure gold and rate-sensitive assets."
+    up_words = ["rises", "rise", "rallies", "rally", "gains", "gain", "jumps", "surges", "climbs", "advances", "strengthens"]
+    down_words = ["falls", "fall", "drops", "drop", "slides", "slide", "tumbles", "declines", "decline", "weakens", "sinks"]
+    neutral_words = ["pauses", "stalls", "steady", "range-bound", "range bound", "flat", "sideways", "consolidates", "consolidation"]
+    vol_words = ["volatile", "volatility", "whipsaw", "swings", "choppy"]
 
-    # Jobs
-    if any(k in t for k in ["non-farm payroll", "nonfarm payroll", "nfp", "jobs report", "unemployment rate", "payrolls"]):
-        if any(k in t for k in ["soft", "weaker", "cool", "slower", "edged higher", "missed"]):
-            return "Softer jobs data can increase rate-cut expectations, which often weighs on the USD and can support gold and risk assets."
-        if any(k in t for k in ["strong", "hot", "higher", "beat", "surprise to the upside"]):
-            return "Stronger jobs data can reduce rate-cut expectations, which often supports the USD and can pressure gold and rate-sensitive assets."
+    has_up = any(w in t for w in up_words)
+    has_down = any(w in t for w in down_words)
+    has_neutral = any(w in t for w in neutral_words)
+    has_vol = any(w in t for w in vol_words)
 
-    # Central bank decisions / guidance
-    if any(k in t for k in ["fomc", "federal reserve", "fed", "ecb", "boe", "boj", "rate decision", "press conference", "minutes", "powell"]):
-        if any(k in t for k in ["dovish", "cut", "easing", "earlier cuts"]):
-            return "A more dovish policy signal can weaken the currency and support risk assets, depending on expectations and guidance."
-        if any(k in t for k in ["hawkish", "hike", "tightening", "higher for longer"]):
-            return "A more hawkish policy signal can support the currency and pressure risk assets, depending on expectations and guidance."
+    if has_vol or (has_up and has_down):
+        return "VOLATILITY"
+    if has_neutral and not (has_up or has_down):
+        return "NEUTRAL"
+    if has_up and not has_down:
+        return "UP"
+    if has_down and not has_up:
+        return "DOWN"
 
-    return ""
+    # Mechanical FX inference only when text explicitly says a currency strengthens/weakens
+    fx_pairs = {"EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDJPY", "USDCHF", "USDCAD", "EURGBP", "EURJPY", "GBPJPY"}
+    if primary in fx_pairs:
+        base = primary[:3]
+        quote = primary[3:]
+
+        def c_strengthens(ccy: str) -> bool:
+            return (f" {ccy.lower()} " in f" {t} ") and ("strengthens" in t)
+
+        def c_weakens(ccy: str) -> bool:
+            return (f" {ccy.lower()} " in f" {t} ") and ("weakens" in t)
+
+        if c_strengthens(base):
+            return "UP"
+        if c_weakens(base):
+            return "DOWN"
+        if c_strengthens(quote):
+            return "DOWN"
+        if c_weakens(quote):
+            return "UP"
+
+        if quote == "USD" and "usd" in t and "strengthens" in t:
+            return "DOWN"
+        if quote == "USD" and "usd" in t and "weakens" in t:
+            return "UP"
+
+    return "UNCLEAR"
+
+def infer_affected_assets(primary: str, text: str):
+    """
+    Short list of affected assets (non-directional).
+    """
+    t = (text or "").lower()
+    affected = []
+
+    def add(x):
+        if x and x not in affected:
+            affected.append(x)
+
+    add(primary)
+
+    if len(primary) == 6 and primary.isalpha():
+        add(primary[:3])
+        add(primary[3:])
+
+    if any(k in t for k in ["fed", "fomc", "powell", "federal reserve"]):
+        add("USD")
+        add("DXY")
+    if "ecb" in t:
+        add("EUR")
+    if "boe" in t:
+        add("GBP")
+    if "boj" in t:
+        add("JPY")
+
+    if primary in ["GOLD", "SILVER"]:
+        add("USD")
+        add("US Yields")
+    if primary in ["WTI", "BRENT", "OIL"]:
+        add("USD")
+    if primary in ["NASDAQ", "SP500", "DOWJONES"]:
+        add("US Yields")
+
+    return affected[:4]
 
 def send_to_telegram(message: str) -> bool:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -220,18 +267,26 @@ def build_message(source, title, summary, published, link):
         "No detailed summary was provided in the RSS feed. Please refer to the original source for full context."
     )
     happened_raw = happened_raw.strip()
-
-    # Make "What happened?" readable
     if len(happened_raw) > 850:
         happened_raw = happened_raw[:850].rsplit(" ", 1)[0] + "..."
 
     happened = safe_text(happened_raw)
 
     combined = f"{title} {summary} {link}"
-    tag = detect_primary_hashtag(combined)
 
-    impact = general_market_impact(combined)
-    impact_line = safe_text(impact) if impact else ""
+    primary = detect_primary_asset(combined)
+    direction = infer_direction(combined, primary)
+    affected = infer_affected_assets(primary, combined)
+
+    direction_map = {
+        "UP": "Higher / strengthening (explicit wording in the source)",
+        "DOWN": "Lower / weakening (explicit wording in the source)",
+        "NEUTRAL": "Paused / range-bound (explicit wording in the source)",
+        "VOLATILITY": "Higher volatility / choppy conditions (explicit wording in the source)",
+        "UNCLEAR": "Direction not explicitly stated (monitor for volatility)"
+    }
+
+    tag = primary_hashtag(primary)
 
     parts = []
     parts.append("✅ <b>MARKET NEWS</b> – <i>Source-based | No Signal</i>\n")
@@ -242,9 +297,10 @@ def build_message(source, title, summary, published, link):
     parts.append("📌 <b>What happened?</b>")
     parts.append(happened + "\n")
 
-    if impact_line:
-        parts.append("📍 <b>General market impact (educational)</b>")
-        parts.append(impact_line + "\n")
+    parts.append("📊 <b>Impact (source-wording based)</b>")
+    parts.append(f"<b>Primary:</b> {safe_text(primary or 'N/A')}")
+    parts.append(f"<b>Direction:</b> {safe_text(direction_map.get(direction, 'N/A'))}")
+    parts.append(f"<b>Most affected:</b> {safe_text(', '.join(affected) if affected else 'N/A')}\n")
 
     parts.append("🕒 <b>Source & time</b>")
     parts.append(f"<b>Source:</b> {safe_text(source)}")
