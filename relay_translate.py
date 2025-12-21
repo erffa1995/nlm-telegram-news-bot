@@ -2,11 +2,16 @@ import os
 import json
 import re
 import requests
+
 from argostranslate import package, translate
 
-BOT_TOKEN = os.getenv("TRANSLATOR_BOT_TOKEN")
-SOURCE_USERNAME = (os.getenv("SOURCE_CHANNEL_USERNAME") or "").lstrip("@").lower().strip()
-TARGET_CHANNEL = os.getenv("TARGET_CHANNEL")
+# ---- ENV ----
+BOT_TOKEN = os.getenv("TRANSLATOR_BOT_TOKEN", "").strip()
+SOURCE_USERNAME = (os.getenv("SOURCE_CHANNEL_USERNAME", "") or "").strip().lstrip("@").lower()
+TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "").strip()
+
+# If set to "1", we drop all pending updates ONCE (useful to stop replay/spam)
+RESET_UPDATES = os.getenv("RESET_UPDATES", "").strip() == "1"
 
 STATE_FILE = "relay_state.json"
 MAX_MESSAGE_LEN = 3800
@@ -14,11 +19,18 @@ MAX_MESSAGE_LEN = 3800
 URL_RE = re.compile(r"(https?://[^\s)>\]]+)", re.IGNORECASE)
 
 
+# -------------------- State --------------------
 def load_state():
     if not os.path.exists(STATE_FILE):
         return {"offset": 0}
-    with open(STATE_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "offset" not in data:
+            data["offset"] = 0
+        return data
+    except Exception:
+        return {"offset": 0}
 
 
 def save_state(state):
@@ -26,10 +38,14 @@ def save_state(state):
         json.dump(state, f)
 
 
-def tg_delete_webhook():
-    # Ensure getUpdates works (no webhook)
+# -------------------- Telegram helpers --------------------
+def tg_delete_webhook(drop_pending: bool):
+    """
+    Ensures polling getUpdates works.
+    If drop_pending=True, clears ALL pending updates once.
+    """
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
-    r = requests.post(url, json={"drop_pending_updates": False}, timeout=30)
+    r = requests.post(url, json={"drop_pending_updates": drop_pending}, timeout=30)
     r.raise_for_status()
 
 
@@ -57,6 +73,7 @@ def tg_send_message(text: str):
     r.raise_for_status()
 
 
+# -------------------- Argos translation --------------------
 def ensure_argos_en_fa():
     installed = translate.get_installed_languages()
     en = next((l for l in installed if l.code == "en"), None)
@@ -69,7 +86,8 @@ def ensure_argos_en_fa():
     candidates = [p for p in available if p.from_code == "en" and p.to_code == "fa"]
     if not candidates:
         raise RuntimeError("No Argos package found for en->fa.")
-    path = candidates[0].download()
+    pkg = candidates[0]
+    path = pkg.download()
     package.install_from_path(path)
 
 
@@ -79,6 +97,7 @@ def tr_en_fa(text: str) -> str:
     return translate.translate(text, "en", "fa")
 
 
+# -------------------- Filtering & parsing --------------------
 def is_from_source_channel(update: dict) -> bool:
     post = update.get("channel_post") or {}
     chat = post.get("chat") or {}
@@ -87,13 +106,20 @@ def is_from_source_channel(update: dict) -> bool:
 
 
 def looks_like_market_news(text: str) -> bool:
+    # Only relay your template posts to avoid relaying random channel content
     t = text or ""
     return ("✅" in t and "MARKET NEWS" in t)
 
 
 def extract_url_from_entities(post: dict) -> str:
+    """
+    Extracts URL from entities:
+    - type=url (URL is in text slice)
+    - type=text_link (URL is in entity.url)
+    """
     entities = post.get("entities") or post.get("caption_entities") or []
     text = post.get("text") or post.get("caption") or ""
+
     for e in entities:
         t = e.get("type")
         if t == "text_link" and e.get("url"):
@@ -102,22 +128,26 @@ def extract_url_from_entities(post: dict) -> str:
             off = e.get("offset", 0)
             ln = e.get("length", 0)
             if ln > 0:
-                return text[off:off + ln]
+                return text[off: off + ln]
     return ""
 
 
 def extract_best_url(post: dict, text: str) -> str:
+    # 1) raw URL in text
     m = URL_RE.search(text or "")
     if m:
         return m.group(1)
+    # 2) entity URL
     u = extract_url_from_entities(post)
-    return u or ""
+    if u:
+        return u
+    return ""
 
 
 def translate_keep_structure(text: str) -> str:
-    lines = (text or "").splitlines()
-    out = []
-
+    """
+    Translates only content lines, keeps structure/headers/hashtags/links.
+    """
     fixed_headers = {
         "✅ <b>MARKET NEWS</b>",
         "📰 <b>Headline</b>",
@@ -126,29 +156,39 @@ def translate_keep_structure(text: str) -> str:
         "🕒 <b>Source & time</b>",
     }
 
+    lines = (text or "").splitlines()
+    out = []
+
     for line in lines:
         s = line.strip()
+
         if not s:
             out.append("")
             continue
 
+        # keep hashtags
         if s.startswith("#"):
             out.append(s)
             continue
 
-        if "<a href=" in s or s.startswith("http://") or s.startswith("https://"):
+        # keep raw links or HTML links
+        if s.startswith("http://") or s.startswith("https://") or "<a href=" in s:
             out.append(line)
             continue
 
+        # keep fixed template headers
         if s in fixed_headers:
             out.append(line)
             continue
 
         low = s.lower()
+
+        # keep these as-is (source name/date/asset tag)
         if low.startswith("<b>source:</b>") or low.startswith("<b>date:</b>") or low.startswith("<b>asset:</b>"):
             out.append(line)
             continue
 
+        # translate direction value only
         if low.startswith("<b>direction:</b>"):
             parts = line.split("</b>", 1)
             if len(parts) == 2:
@@ -159,25 +199,32 @@ def translate_keep_structure(text: str) -> str:
                 out.append(line)
             continue
 
+        # translate normal content lines
         out.append(tr_en_fa(s))
 
     return "\n".join(out).strip()
 
 
-def ensure_link_present(fa_text: str, url: str) -> str:
+def ensure_link_present(final_text: str, url: str) -> str:
     if not url:
-        return fa_text
-    if ("http://" in fa_text) or ("https://" in fa_text) or ("<a href=" in fa_text):
-        return fa_text
-    return (fa_text.rstrip() + "\n\n" + f'🔗 <a href="{url}">Read full article</a>').strip()
+        return final_text
+    # if already contains any link, do nothing
+    if ("http://" in final_text) or ("https://" in final_text) or ("<a href=" in final_text):
+        return final_text
+    # append link at end
+    return (final_text.rstrip() + "\n\n" + f'🔗 <a href="{url}">Read full article</a>').strip()
 
 
+# -------------------- Main --------------------
 def main():
     if not BOT_TOKEN or not SOURCE_USERNAME or not TARGET_CHANNEL:
-        raise RuntimeError("Missing secrets: TRANSLATOR_BOT_TOKEN, SOURCE_CHANNEL_USERNAME, TARGET_CHANNEL")
+        raise RuntimeError(
+            "Missing env. Need: TRANSLATOR_BOT_TOKEN, SOURCE_CHANNEL_USERNAME (no @), TARGET_CHANNEL (with @)."
+        )
 
-    # 🔥 critical fix: ensure polling works
-    tg_delete_webhook()
+    # Critical: polling requires no webhook.
+    # If RESET_UPDATES=1, we drop pending updates to stop replay spam.
+    tg_delete_webhook(drop_pending=RESET_UPDATES)
 
     ensure_argos_en_fa()
 
@@ -205,15 +252,17 @@ def main():
         if not text.strip():
             continue
 
+        # relay only your template messages
         if not looks_like_market_news(text):
             continue
 
         url = extract_best_url(post, text)
+
         fa_text = translate_keep_structure(text)
         fa_text = ensure_link_present(fa_text, url)
 
         if len(fa_text) > MAX_MESSAGE_LEN:
-            fa_text = fa_text[:MAX_MESSAGE_LEN - 3] + "..."
+            fa_text = fa_text[: MAX_MESSAGE_LEN - 3] + "..."
 
         tg_send_message(fa_text)
         sent += 1
