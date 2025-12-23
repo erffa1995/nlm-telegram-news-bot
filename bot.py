@@ -1,13 +1,21 @@
 import os
 import json
+import time
+import hashlib
 import feedparser
 import requests
 import html
 import re
 from urllib.parse import quote
 
+# --- ENV ---
 BOT_TOKEN = os.getenv("NEWS_BOT_TOKEN")
 CHANNEL = os.getenv("NEWS_CHANNEL")
+
+# How fresh should news be? Default: last 24 hours
+MAX_AGE_HOURS = int(os.getenv("MAX_AGE_HOURS", "24"))
+NOW_TS = int(time.time())
+MIN_TS = NOW_TS - (MAX_AGE_HOURS * 3600)
 
 STATE_FILE = "state.json"
 MAX_MESSAGE_LEN = 3800
@@ -15,7 +23,7 @@ MAX_MESSAGE_LEN = 3800
 FEEDS = {
     "FXStreet": "https://www.fxstreet.com/rss/news",
     "DailyFX": "https://www.dailyfx.com/feeds/market-news",
-    "Forexlive": "https://www.forexlive.com/feed/news/"
+    "Forexlive": "https://www.forexlive.com/feed/news/",
 }
 
 HIGH_IMPACT_TERMS = [
@@ -26,7 +34,7 @@ HIGH_IMPACT_TERMS = [
     "federal reserve", "fed rate", "rate decision",
     "ecb rate", "boe rate", "boj rate",
     "ecb meeting", "boe meeting", "boj meeting",
-    "press conference"
+    "press conference",
 ]
 
 RELEVANCE_TERMS = [
@@ -34,7 +42,7 @@ RELEVANCE_TERMS = [
     "eur/usd", "gbp/usd", "usd/jpy", "usd/chf",
     "gold", "silver", "xau", "xag",
     "dax", "dow", "nasdaq", "s&p", "spx", "ndx",
-    "oil", "brent", "wti", "crude"
+    "oil", "brent", "wti", "crude",
 ]
 
 PAIR_RULES = [
@@ -54,6 +62,19 @@ NONFX_PRIMARY_RULES = [
     ("dow", "DOWJONES"), ("dax", "DAX"),
     ("oil", "OIL"),
 ]
+
+def load_state():
+    if not os.path.exists(STATE_FILE):
+        return set()
+    with open(STATE_FILE, "r", encoding="utf-8") as f:
+        try:
+            return set(json.load(f))
+        except Exception:
+            return set()
+
+def save_state(ids):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(ids), f)
 
 def strip_html(text):
     return re.sub(r"\s+", " ", re.sub(r"<.*?>", "", text or "")).strip()
@@ -95,21 +116,33 @@ def infer_direction(text):
         return "Paused / range-bound"
     return "Direction not explicitly stated"
 
-def load_state():
-    if not os.path.exists(STATE_FILE):
-        return set()
-    with open(STATE_FILE, "r", encoding="utf-8") as f:
-        return set(json.load(f))
+def entry_timestamp(entry) -> int | None:
+    """
+    Use published_parsed/updated_parsed if available.
+    Returns unix timestamp or None if unknown.
+    """
+    st = entry.get("published_parsed") or entry.get("updated_parsed")
+    if not st:
+        return None
+    try:
+        return int(time.mktime(st))  # treats struct_time as local time; ok for age filtering
+    except Exception:
+        return None
 
-def save_state(ids):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(ids), f)
+def make_uid(entry, source: str) -> str:
+    """
+    Stable UID to avoid duplicates even if RSS IDs change.
+    """
+    link = (entry.get("link") or "").strip()
+    title = (entry.get("title") or "").strip()
+    pub = (entry.get("published") or entry.get("updated") or "").strip()
+    raw = f"{source}|{link}|{title}|{pub}"
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
 
 def send_to_telegram(msg):
     if not BOT_TOKEN or not CHANNEL:
-        raise RuntimeError(
-            f"Missing secrets. NEWS_BOT_TOKEN set? {bool(BOT_TOKEN)} | NEWS_CHANNEL set? {bool(CHANNEL)}"
-        )
+        raise RuntimeError("Missing NEWS_BOT_TOKEN or NEWS_CHANNEL secrets.")
+
     r = requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
         json={
@@ -128,6 +161,7 @@ def send_to_telegram(msg):
 def build_message(source, title, summary, published, link):
     clean_summary = strip_html(summary)
     combined = f"{title} {summary} {link}"
+
     asset = detect_primary_asset(combined)
     direction = infer_direction(combined)
 
@@ -156,11 +190,26 @@ def build_message(source, title, summary, published, link):
 
 def main():
     posted = load_state()
+    sent = 0
+    skipped_old = 0
+    skipped_no_date = 0
+
     for source, url in FEEDS.items():
         feed = feedparser.parse(url)
+
         for e in feed.entries:
-            uid = e.get("id") or e.get("guid") or e.get("link")
-            if not uid or uid in posted:
+            ts = entry_timestamp(e)
+            if ts is None:
+                skipped_no_date += 1
+                continue
+
+            # Only last MAX_AGE_HOURS
+            if ts < MIN_TS:
+                skipped_old += 1
+                continue
+
+            uid = make_uid(e, source)
+            if uid in posted:
                 continue
 
             title = e.get("title", "") or ""
@@ -177,8 +226,10 @@ def main():
             msg = build_message(source, title, summary, published, link)
             if send_to_telegram(msg):
                 posted.add(uid)
+                sent += 1
 
     save_state(posted)
+    print(f"Sent: {sent} | Skipped old: {skipped_old} | Skipped no-date: {skipped_no_date}")
 
 if __name__ == "__main__":
     main()
