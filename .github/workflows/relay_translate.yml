@@ -3,7 +3,8 @@ name: Relay EN->FA (Telegram)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
+    # Runs at minute 2,12,22,32,42,52 each hour
+    - cron: "2-59/10 * * * *"
 
 permissions:
   contents: write
@@ -16,15 +17,17 @@ jobs:
   relay:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           persist-credentials: true
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests argostranslate
